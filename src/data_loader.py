@@ -161,13 +161,13 @@ class DataLoader:
         logger.info(f"✅ Final dataset ready. Shape: {final_dataset.shape}")
         return final_dataset
 
-    def save_raw_data(self, df, filename="data/raw/final_gold_dataset.csv"):
+    def save_raw_data(self, df, filename="final_gold_dataset.csv"):
         """Save the raw merged dataset to disk."""
         path = os.path.join(self.data_raw_dir, filename)
         df.to_csv(path)
         logger.info(f"Raw data saved to {path}")
 
-    def load_raw_data(self, filename="data/raw/final_gold_dataset.csv"):
+    def load_raw_data(self, filename="final_gold_dataset.csv"):
         """Load raw dataset from disk."""
         path = os.path.join(self.data_raw_dir, filename)
         if os.path.exists(path):
