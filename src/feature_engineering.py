@@ -1,89 +1,107 @@
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler
-import joblib
 import os
+import sys
 
-def process_features(input_path="datasets/final_features_toman.csv", output_dir="processed_data_v2"):
-    print("--- Starting Advanced Feature Engineering (Log Returns Strategy) ---")
-    
-    # 1. Load Data
-    df = pd.read_csv(input_path)
-    df['Date'] = pd.to_datetime(df['Date'])
-    df = df.sort_values('Date').reset_index(drop=True)
-    
-    # 2. Calculate Log Returns 
-    cols_to_convert = ['Gold_Toman', 'USD_Toman', 'Ounce_Toman', 'Oil_Toman']
-    
-    for col in cols_to_convert:
-        # ln(Price_t / Price_t-1)
-        df[f'{col}_LogRet'] = np.log(df[col] / df[col].shift(1))
-    
-    # Drop first row(NaN)
-    df = df.dropna().reset_index(drop=True)
+# Add root directory to path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config.settings import CONF
+from src.utils import logger
 
-    # 3. Create Lag Features based on RETURNS 
-    features_to_lag = [f'{c}_LogRet' for c in cols_to_convert]
-    lags = [1, 2, 3, 5]  
-    
-    cols = []
-    for col in features_to_lag:
-        for lag in lags:
-            col_name = f'{col}_Lag_{lag}'
-            df[col_name] = df[col].shift(lag)
-            cols.append(col_name)
-    
-    # 4. Define Target 
-    df['Target_NextDay_LogRet'] = df['Gold_Toman_LogRet'].shift(-1)
-    
-    df_final = df.dropna().reset_index(drop=True)
-    
-    print(f"Dataset Shape after processing: {df_final.shape}")
-    
-    # 5. Prepare X and y
-    feature_cols = [c for c in df_final.columns if 'Lag' in c]
-    X = df_final[feature_cols].values
-    y = df_final['Target_NextDay_LogRet'].values.reshape(-1, 1)
-    
-    actual_prices = df_final['Gold_Toman'].values.reshape(-1, 1)
-    dates = df_final['Date'].values
-    
-    # 6. Train/Test Split (Time-based)
-    train_size = int(len(X) * 0.85)
-    
-    X_train, X_test = X[:train_size], X[train_size:]
-    y_train, y_test = y[:train_size], y[train_size:]
-    
-    prices_test = actual_prices[train_size:] 
-    dates_test = dates[train_size:]
-    
-    # 7. Scaling (Using StandardScaler for Returns)
-    scaler_X = StandardScaler()
-    scaler_y = StandardScaler()
-    
-    X_train_scaled = scaler_X.fit_transform(X_train)
-    X_test_scaled = scaler_X.transform(X_test)
-    
-    y_train_scaled = scaler_y.fit_transform(y_train)
-    y_test_scaled = scaler_y.transform(y_test)
-    
-    # 8. Save Everything
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+class FeatureEngineer:
+    def __init__(self):
+        """
+        Initialize the Feature Engineer.
+        """
+        self.processed_dir = CONF.DATA_PROCESSED_DIR
+
+    @staticmethod
+    def calculate_rsi(series, period=14):
+        """
+        Calculate Relative Strength Index (RSI).
+        """
+        delta = series.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+        return rsi
+
+    def add_technical_indicators(self, df):
+        """
+        Add technical indicators (SMA, EMA, MACD, RSI, Bollinger Bands).
+        """
+        df = df.copy()
         
-    np.save(f'{output_dir}/X_train.npy', X_train_scaled)
-    np.save(f'{output_dir}/X_test.npy', X_test_scaled)
-    np.save(f'{output_dir}/y_train.npy', y_train_scaled)
-    np.save(f'{output_dir}/y_test.npy', y_test_scaled)
-    
-    np.save(f'{output_dir}/prices_test_base.npy', prices_test) 
-    np.save(f'{output_dir}/dates_test.npy', dates_test)
-    
-    joblib.dump(scaler_X, f'{output_dir}/scaler_X.pkl')
-    joblib.dump(scaler_y, f'{output_dir}/scaler_y.pkl')
-    
-    print("✅ Feature Engineering Complete. Data saved to 'processed_data_v2/'")
-    print(f"Features used: {len(feature_cols)}")
+        # Simple Moving Averages
+        df['SMA_7'] = df['Gold_IRR'].rolling(window=7).mean()
+        df['SMA_30'] = df['Gold_IRR'].rolling(window=30).mean()
 
-if __name__ == "__main__":
-    process_features()
+        # MACD (12, 26, 9)
+        exp1 = df['Gold_IRR'].ewm(span=12, adjust=False).mean()
+        exp2 = df['Gold_IRR'].ewm(span=26, adjust=False).mean()
+        df['MACD'] = exp1 - exp2
+        df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+
+        # RSI
+        df['RSI_14'] = self.calculate_rsi(df['Gold_IRR'], period=14)
+
+        # Bollinger Bands (20, 2)
+        sma_20 = df['Gold_IRR'].rolling(window=20).mean()
+        std_20 = df['Gold_IRR'].rolling(window=20).std()
+        df['Bollinger_Upper'] = sma_20 + (std_20 * 2)
+        df['Bollinger_Lower'] = sma_20 - (std_20 * 2)
+
+        return df
+
+    def create_features(self, df):
+        """
+        Main method to create all features including Log Returns and Lags.
+        """
+        logger.info("Starting feature engineering...")
+        
+        # 1. Add Technical Indicators (based on absolute price)
+        df = self.add_technical_indicators(df)
+
+        # 2. Calculate Log Returns (The core feature for Phase 3 Model)
+        # Log Return = ln(Price_t / Price_t-1)
+        df['Gold_LogRet'] = np.log(df['Gold_IRR'] / df['Gold_IRR'].shift(1))
+        df['USD_LogRet'] = np.log(df['USD_IRR'] / df['USD_IRR'].shift(1))
+        
+        # Global market returns (Handle zeros/NaNs if necessary)
+        if 'Ounce_USD' in df.columns:
+            df['Ounce_LogRet'] = np.log(df['Ounce_USD'] / df['Ounce_USD'].shift(1))
+        if 'Oil_USD' in df.columns:
+            df['Oil_LogRet'] = np.log(df['Oil_USD'] / df['Oil_USD'].shift(1))
+
+        # 3. Create Lags (Past values used to predict future)
+        # We lag the Log Returns because they are stationary
+        lags = [1, 2, 3, 7]
+        for lag in lags:
+            df[f'Gold_LogRet_Lag_{lag}'] = df['Gold_LogRet'].shift(lag)
+            df[f'USD_LogRet_Lag_{lag}'] = df['USD_LogRet'].shift(lag)
+            if 'Ounce_LogRet' in df.columns:
+                df[f'Ounce_LogRet_Lag_{lag}'] = df['Ounce_LogRet'].shift(lag)
+        
+        # 4. Create Target Variable
+        # We want to predict the NEXT day's log return of Gold
+        df['Target_Next_LogRet'] = df['Gold_LogRet'].shift(-1)
+        
+        # Also keep next day price for backtesting convenience (optional but useful)
+        df['Target_Next_Price'] = df['Gold_IRR'].shift(-1)
+
+        # 5. Clean up
+        # Drop NaN values generated by rolling windows and shifting
+        initial_len = len(df)
+        df.dropna(inplace=True)
+        final_len = len(df)
+        
+        logger.info(f"✅ Feature engineering complete. Rows: {initial_len} -> {final_len}")
+        return df
+
+    def save_processed_data(self, df, filename="data/raw/advanced_gold_features.csv"):
+        """Save the processed dataset with features to disk."""
+        path = os.path.join(self.processed_dir, filename)
+        df.to_csv(path)
+        logger.info(f"Processed data saved to {path}")
