@@ -1,6 +1,5 @@
 """
 API Client Example - How to use the Gold Price Prediction API
-File: src/api/client_example.py
 """
 import requests
 import json
@@ -110,7 +109,7 @@ def example_usage():
     # Create example features (30 time steps, 15 features)
     # In production, these would be real market data
     features = np.random.randn(30, 15)
-    current_price = 95_000_000  # 95 million Toman
+    current_price = 144_000_000
     
     result = client.predict(features, current_price)
     
@@ -129,7 +128,7 @@ def example_usage():
     pred = conf_result['prediction']
     print(f"\n📊 Predicted Price: {pred['predicted_price']:,.0f} Toman")
     print(f"📊 95% CI: [{pred['confidence_interval_95']['lower']:,.0f}, {pred['confidence_interval_95']['upper']:,.0f}]")
-    print(f"📊 68% CI: [{pred['confidence_interval_68']['lower']:,.0f}, {pred['confidence_interval_68']['upper']:,.0f}]")
+    # print(f"📊 68% CI: [{pred['confidence_interval_68']['lower']:,.0f}, {pred['confidence_interval_68']['upper']:,.0f}]")
     print(f"📊 Std Dev: {pred['std_dev']:,.0f} Toman")
 
 

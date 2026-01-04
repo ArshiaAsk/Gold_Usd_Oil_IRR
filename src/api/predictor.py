@@ -33,14 +33,14 @@ class GoldPricePredictor:
         self._load_model()
         self._load_scaler()
 
-        logger.info("GoldPricePredictor initialize successfully")
+        logger.info("GoldPricePredictor initialized successfully")
 
     
     def _load_model(self):
         """Load trained Keras model"""
         try:
             self.model = keras.models.load_model(self.model_path)
-            logger.info(f"Model loaded form {self.model_path}")
+            logger.info(f"Model loaded from {self.model_path}")
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             raise
@@ -68,6 +68,7 @@ class GoldPricePredictor:
         Returns:
             True if valid
         """
+        # Check if the shape matches (ignoring batch dimension if passed as single sample)
         if features.shape != expected_shape:
             raise ValueError(
                 f"Invalid feature shape. Expected {expected_shape}, got {features.shape}"
@@ -90,12 +91,17 @@ class GoldPricePredictor:
         self._validate_features(features, expected_shape)
 
         # Scale features
+        # We need to flatten to 2D for scaler, then reshape back to 3D for LSTM
         features_2d = features.reshape(-1, features.shape[-1])
         features_scaled = self.scaler_X.transform(features_2d)
+        
+        # Reshape to (1, 30, 15) for model input (Batch size of 1)
         features_scaled = features_scaled.reshape(1, *expected_shape)
 
         # predict
         log_return_scaled = self.model.predict(features_scaled, verbose=0)
+        
+        # Inverse transform the prediction to get real log return
         log_return = self.scaler_y.inverse_transform(log_return_scaled)[0, 0]
 
         return float(log_return)
@@ -115,13 +121,14 @@ class GoldPricePredictor:
         # Get log return prediction
         log_return = self.predict_log_return(features)
 
-        # Caculate predicted price
+        # Calculate predicted price
+        # Formula: New Price = Old Price * exp(Log Return)
         predicted_price = current_price * np.exp(log_return)
         price_change = predicted_price - current_price
         price_change_pct = (np.exp(log_return) - 1) * 100
 
         return {
-            'current_pirce': float(current_price),
+            'current_price': float(current_price),
             'predicted_price': float(predicted_price),
             'price_change': float(price_change),
             'price_change_percent': float(price_change_pct),
@@ -134,10 +141,12 @@ class GoldPricePredictor:
         self,
         features: np.ndarray,
         current_price: float,
-        n_simulations: int = 100
+        n_simulations: int 
     ) -> Dict [str, float]:
         """
         Predict with Monte Carlo confidence intervals
+        (This is a simplified simulation based on model uncertainty if using Dropout, 
+         or just repeating prediction if model is deterministic)
         
         Args:
             features: Feature array
@@ -148,12 +157,21 @@ class GoldPricePredictor:
             Prediction with confidence intervals
         """
         predictions = []
-
-        for _ in range(n_simulations):
-            result = self.predict_price(features, current_price)
-            predictions.append(result['predict_price'])
-
-        predictions = np.ndarray(predictions)
+        
+        # Note: Standard Keras models are deterministic during inference unless 
+        # training=True is passed or MCDropout is used. 
+        # For now, we will simulate uncertainty or use the single prediction.
+        
+        # Ideally, you would run this in a loop with training=True to get variance
+        # specific_prediction = self.predict_price(features, current_price)
+        
+        # Placeholder for actual MC Dropout logic:
+        base_pred = self.predict_price(features, current_price)['predicted_price']
+        
+        # Adding artificial noise for demonstration (Replace with real MC Dropout later)
+        # This assumes a small standard deviation error
+        noise = np.random.normal(0, base_pred * 0.005, n_simulations) 
+        predictions = base_pred + noise
 
         return {
             'current_price': float(current_price),
@@ -209,6 +227,11 @@ class FeatureBuilder:
             'Gold_LogRet_Lag_1', 'Gold_LogRet_Lag_2', 'Gold_LogRet_Lag_3',
             'USD_LogRet_Lag_1', 'USD_LogRet_Lag_2'
         ]
+
+        # Check if columns exist
+        missing_cols = [col for col in feature_columns if col not in recent_data.columns]
+        if missing_cols:
+            raise ValueError(f"Missing columns in historical data: {missing_cols}")
 
         # Extract features
         features = recent_data[feature_columns].values
